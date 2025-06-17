@@ -1,130 +1,43 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// === Supabase setup ===
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const SUPABASE_URL = 'https://twsjtdnygfxmgjvczvkx.supabase.co';
-const SUPABASE_KEY = 'YOUR_SUPABASE_SERVICE_KEY'; // Replace this with your service key
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// === Telegram Bot Token ===
-const BOT_TOKEN = '7904940307:AAFOaeYHuyiMCsG56ciDRdiRuzem04OQlNo';
-
-
-// === Handle Booking Submission ===
-app.post('/bookings', async (req, res) => {
-  const data = req.body;
-
-  const publicMessage = `
-🚕 *New Booking Available*
-🛣 Trip Type: *${data.tripType}*
-🚗 Car Type: *${data.carType}*
-📍 From: *${data.pickupLocation}*
-📍 To: *${data.dropLocation}*
-🕓 Pickup: *${data.pickupTime}*
-💰 Tariff: *${data.tariff}*
-🌙 Night Charges: ₹100 (10 PM – 5 AM)
-
-👉 Click *Accept* if you're available.
-  `;
-
-  try {
-    // Fetch all group IDs from Supabase
-    const { data: groups, error } = await supabase
-      .from('telegram_groups')
-      .select('group_id');
-
-    if (error || !groups || groups.length === 0) {
-      return res.status(400).json({ error: 'No Telegram groups saved' });
-    }
-
-    // Send message to all groups
-    for (const group of groups) {
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        chat_id: group.group_id,
-        text: publicMessage,
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Accept', callback_data: 'accept_booking' },
-              { text: '❌ Skip', callback_data: 'skip_booking' }
-            ]
-          ]
-        }
-      });
-    }
-
-    res.json({ status: 'ok', message: 'Booking posted to groups' });
-
-  } catch (err) {
-    console.error('Error sending booking:', err);
-    res.status(500).json({ error: 'Failed to send booking' });
-  }
-});
-
-
-// === Handle Accept/Skip Button ===
 app.post(`/webhook/${BOT_TOKEN}`, async (req, res) => {
-  const body = req.body;
+    const data = req.body;
 
-  if (body.callback_query) {
-    const chatId = body.callback_query.message.chat.id;
-    const user = body.callback_query.from;
-    const action = body.callback_query.data;
+    if (data?.message?.text === '/getid') {
+        const chat = data.message.chat;
+        if (chat.type === 'group' || chat.type === 'supergroup') {
+            const { id, title } = chat;
+            const { data: saved, error } = await supabase
+                .from('group_ids')
+                .upsert({ group_id: id, group_name: title }, { onConflict: 'group_id' });
 
-    let text = '';
-    if (action === 'accept_booking') {
-      text = `✅ *${user.first_name}* accepted this booking. Contact will be shared privately.`;
-    } else {
-      text = `❌ *${user.first_name}* skipped the booking.`;
+            return res.send({
+                text: error ? '❌ Failed to save group ID.' : `✅ Group ID saved: ${id}`,
+            });
+        } else {
+            return res.send({ text: '❌ Use this command in a group.' });
+        }
     }
 
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      text,
-      parse_mode: 'Markdown'
-    });
-  }
-
-  res.sendStatus(200);
+    res.sendStatus(200);
 });
 
-
-// === /getid Command to Save Telegram Group Chat ID ===
-app.post(`/webhook/getid/${BOT_TOKEN}`, async (req, res) => {
-  const body = req.body;
-
-  if (body.message && body.message.text === '/getid') {
-    const chat = body.message.chat;
-
-    if (chat.type !== 'group' && chat.type !== 'supergroup') {
-      return res.sendStatus(200);
-    }
-
-    const { data, error } = await supabase
-      .from('telegram_groups')
-      .upsert([{ group_id: chat.id, group_name: chat.title }]);
-
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: chat.id,
-      text: '✅ Group connected successfully!',
-    });
-
-    res.sendStatus(200);
-  } else {
-    res.sendStatus(200);
-  }
+app.get('/', (req, res) => {
+    res.send('🚗 Telegram Booking Bot is running!');
 });
 
-
-// === Start Server ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Booking bot server running on port ${PORT}`);
+    console.log(`✅ Server running on port ${PORT}`);
 });
