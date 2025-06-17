@@ -1,4 +1,4 @@
-// index.js (Render backend)
+// index.js
 const express = require('express');
 const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
@@ -8,20 +8,20 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(bodyParser.json());
-
-// Setup Supabase
+// === Supabase Setup ===
 const supabase = createClient(
   'https://twsjtdnygfxmgjvczvkx.supabase.co',
-  'YOUR_SUPABASE_SERVICE_ROLE_KEY' // Replace this with service_role key (not anon)
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Setup Telegram Bot
+// === Telegram Bot Setup ===
 const bot = new TelegramBot('7904940307:AAFOaeYHuyiMCsG56ciDRdiRuzem04OQlNo', {
   polling: true
 });
 
-// === Handle /getid command to store group info ===
+app.use(bodyParser.json());
+
+// === Register group via /getid ===
 bot.onText(/\/getid/, async (msg) => {
   const chat = msg.chat;
 
@@ -46,7 +46,7 @@ bot.onText(/\/getid/, async (msg) => {
   }
 });
 
-// === Accept Callback Handler ===
+// === Accept Callback ===
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const data = callbackQuery.data;
@@ -56,7 +56,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// === POST route to receive booking and send to all groups ===
+// === Booking API to post booking to all groups ===
 app.post('/bookings', async (req, res) => {
   const booking = req.body;
 
@@ -65,8 +65,8 @@ app.post('/bookings', async (req, res) => {
     .select('*');
 
   if (error) {
-    console.error('Error fetching groups:', error);
-    return res.status(500).send('Failed to fetch groups.');
+    console.error('Group fetch failed:', error);
+    return res.status(500).send('Group fetch failed.');
   }
 
   const companyInfo = `🏢 *${booking.companyName}*\n📞 +91 ${booking.mobileNumber}`;
@@ -74,10 +74,10 @@ app.post('/bookings', async (req, res) => {
 📢 *New Booking*
 🚕 Trip: ${booking.tripType}
 🚗 Car: ${booking.carType}
-📍 Pickup: ${booking.pickupLocation || 'undefined'}
-📍 Drop: ${booking.dropLocation || 'undefined'}
-🕒 Date & Time: ${booking.pickupTime || 'undefined'}
-💰 Tariff: ${booking.tariff || 'undefined'}
+📍 Pickup: ${booking.pickupLocation}
+📍 Drop: ${booking.dropLocation}
+🕒 Date & Time: ${booking.pickupTime}
+💰 Tariff: ${booking.tariff}
   `;
 
   for (let group of groups) {
@@ -91,19 +91,18 @@ app.post('/bookings', async (req, res) => {
         }
       });
     } catch (err) {
-      console.error(`Failed to send to group ${group.group_id}:`, err.message);
+      console.error(`Message to group ${group.group_id} failed:`, err.message);
     }
   }
 
-  res.send('Booking sent to all groups.');
+  res.send('Booking sent.');
 });
 
-// === Basic Test Route ===
+// === Test route ===
 app.get('/', (req, res) => {
-  res.send('Telegram Booking Bot is live.');
+  res.send('Telegram bot backend is working.');
 });
 
-// === Start Server ===
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
