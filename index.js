@@ -1,89 +1,109 @@
+// index.js (Render backend)
 const express = require('express');
 const bodyParser = require('body-parser');
-const cors = require('cors');
-const axios = require('axios');
+const TelegramBot = require('node-telegram-bot-api');
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 3000;
+
 app.use(bodyParser.json());
 
-const BOT_TOKEN = '7904940307:AAFOaeYHuyiMCsG56ciDRdiRuzem04OQlNo';
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const COMPANY_NAME = 'My Logistics Pvt Ltd';
-const REGISTERED_MOBILE = '+91 9876543210';
+// Setup Supabase
+const supabase = createClient(
+  'https://twsjtdnygfxmgjvczvkx.supabase.co',
+  'YOUR_SUPABASE_SERVICE_ROLE_KEY' // Replace this with service_role key (not anon)
+);
 
-const bookings = {};
-
-app.post('/webhook', async (req, res) => {
-  const callback = req.body.callback_query;
-  if (!callback) return res.sendStatus(200);
-  res.sendStatus(200);
-
-  const message_id = callback.message.message_id;
-  const chat_id = callback.message.chat.id;
-  const driver_id = callback.from.id;
-  const driver_name = `${callback.from.first_name || ''} ${callback.from.last_name || ''}`.trim();
-
-  const booking = bookings[message_id];
-  if (!booking) return;
-
-  const updatedText = `🏢 *${COMPANY_NAME}*\n📱 *${REGISTERED_MOBILE}*\n\n` +
-    `🆕 *Booking Confirmed!*\n\n` +
-    `🚘 *Trip:* ${booking.tripType}\n🚗 *Car:* ${booking.carType}\n📍 *Pickup:* ${booking.pickup}\n` +
-    `${booking.tripType !== 'Local Round Trip' ? `🔻 *Drop:* ${booking.drop}\n` : ''}` +
-    `🗓️ *Date & Time:* ${booking.pickupDate} ${booking.pickupTime}\n💵 *Tariff:* ${booking.tariff}\n` +
-    `👨‍✈️ *Driver:* ${driver_name}\n📞 *Driver Contact:* Not Set`;
-
-  await axios.post(`${TELEGRAM_API}/editMessageText`, {
-    chat_id,
-    message_id,
-    text: updatedText,
-    parse_mode: 'Markdown'
-  });
-
-  const privateMsg = `📦 *New Booking Assigned to You*\n\n` +
-    `👤 *Customer:* ${booking.name}\n📞 *Mobile:* ${booking.mobile}\n\n` +
-    `🚘 *Trip:* ${booking.tripType}\n🚗 *Car:* ${booking.carType}\n📍 *Pickup:* ${booking.pickup}\n` +
-    `${booking.tripType !== 'Local Round Trip' ? `🔻 *Drop:* ${booking.drop}\n` : ''}` +
-    `🗓️ *Date & Time:* ${booking.pickupDate} ${booking.pickupTime}`;
-
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: driver_id,
-    text: privateMsg,
-    parse_mode: 'Markdown'
-  });
+// Setup Telegram Bot
+const bot = new TelegramBot('7904940307:AAFOaeYHuyiMCsG56ciDRdiRuzem04OQlNo', {
+  polling: true
 });
 
-app.post('/new-booking', async (req, res) => {
-  const data = req.body;
+// === Handle /getid command to store group info ===
+bot.onText(/\/getid/, async (msg) => {
+  const chat = msg.chat;
 
-  const message = `🏢 *${COMPANY_NAME}*\n📱 *${REGISTERED_MOBILE}*\n\n` +
-    `🆕 *New Booking*\n\n` +
-    `🚘 *Trip:* ${data.tripType}\n🚗 *Car:* ${data.carType}\n📍 *Pickup:* ${data.pickup}\n` +
-    `${data.tripType !== 'Local Round Trip' ? `🔻 *Drop:* ${data.drop}\n` : ''}` +
-    `🗓️ *Date & Time:* ${data.pickupDate} ${data.pickupTime}\n💵 *Tariff:* ${data.tariff}`;
+  if (chat.type === 'group' || chat.type === 'supergroup') {
+    const groupId = chat.id;
+    const groupTitle = chat.title;
 
-  const sendRes = await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: '-1002808640689',
-    text: message,
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [[
-        { text: "✅ Accept", callback_data: "accept" }
-      ]]
+    const { data, error } = await supabase
+      .from('telegram_groups')
+      .upsert([
+        { group_id: groupId, group_name: groupTitle }
+      ], { onConflict: ['group_id'] });
+
+    if (error) {
+      console.error('Supabase error:', error);
+      bot.sendMessage(chat.id, '❌ Failed to register this group.');
+    } else {
+      bot.sendMessage(chat.id, '✅ This group is now registered for bookings.');
     }
-  });
+  } else {
+    bot.sendMessage(chat.id, '❌ Please use this command from a group.');
+  }
+});
 
-  if (sendRes.data.ok) {
-    bookings[sendRes.data.result.message_id] = data;
+// === Accept Callback Handler ===
+bot.on('callback_query', async (callbackQuery) => {
+  const message = callbackQuery.message;
+  const data = callbackQuery.data;
+
+  if (data === 'accept') {
+    bot.sendMessage(message.chat.id, `✅ Accepted by @${callbackQuery.from.username || callbackQuery.from.first_name}`);
+  }
+});
+
+// === POST route to receive booking and send to all groups ===
+app.post('/bookings', async (req, res) => {
+  const booking = req.body;
+
+  const { data: groups, error } = await supabase
+    .from('telegram_groups')
+    .select('*');
+
+  if (error) {
+    console.error('Error fetching groups:', error);
+    return res.status(500).send('Failed to fetch groups.');
   }
 
-  res.json({ ok: true });
+  const companyInfo = `🏢 *${booking.companyName}*\n📞 +91 ${booking.mobileNumber}`;
+  const bookingInfo = `
+📢 *New Booking*
+🚕 Trip: ${booking.tripType}
+🚗 Car: ${booking.carType}
+📍 Pickup: ${booking.pickupLocation || 'undefined'}
+📍 Drop: ${booking.dropLocation || 'undefined'}
+🕒 Date & Time: ${booking.pickupTime || 'undefined'}
+💰 Tariff: ${booking.tariff || 'undefined'}
+  `;
+
+  for (let group of groups) {
+    try {
+      await bot.sendMessage(group.group_id, `${companyInfo}\n${bookingInfo}`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Accept', callback_data: 'accept' }]
+          ]
+        }
+      });
+    } catch (err) {
+      console.error(`Failed to send to group ${group.group_id}:`, err.message);
+    }
+  }
+
+  res.send('Booking sent to all groups.');
 });
 
+// === Basic Test Route ===
 app.get('/', (req, res) => {
-  res.send('Bot is live!');
+  res.send('Telegram Booking Bot is live.');
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// === Start Server ===
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
